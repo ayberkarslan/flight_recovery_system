@@ -60,6 +60,9 @@ typedef enum {
 #define LOW_PASS_ALPHA_NORMAL	0.2f    // low pass filtre katsayısı
 #define LOW_PASS_ALPHA_SECURE	0.05f
 
+
+#define NEGATIVE_VELOCITY_CONFIRM_VALUE	-2.0f
+#define LANDING_VELOCITY_CONFIRM_VALUE  0.5f
 // BMP180 sensörmüzn moduna göre maksimum okuma yapma sürelerini buldum ve bu sürelere göre bekleme yaptık döngü sonundaki HAL_Delay fonksiyonunda
 
 #define BMP180_MODE	3
@@ -92,6 +95,9 @@ FlightState currentState = WAITING_ON_PAD;
 float groundAltitude = 0.0f;     // Rampa kalibrasyon için iritifa değeri
 float currentRelativeAltitude = 0.0f; // Yere göre güncel filtrelenmiş irtifa
 float maxRelativeAltitude = 0.0f;     // Uçuş boyunca ulaşılan maksimum irtifa
+float previousAltitude = 0.0f;
+float verticalV = 0.0f;
+uint32_t lastVTime = 0.0f;
 
 // Low-Pass Filtre Değişkeni
 float filteredAltitude = 0.0f;
@@ -111,12 +117,14 @@ void launch_drag_parachute(){
 void launch_main_parachute(){
 
 }
+
+void sendTelemetry(char* message);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// Basınçtan Mutlak İrtifa Hesaplama
+// basınç ve sıcaklığı alarak daha keskin irtifa hesabı yaptık sadece basınç üzerinden hesap yapmaya kıyasla
 float getAltitude(int32_t pressure, float temperature) {
 
 	float T_kelvin = temperature + 273.15f;
@@ -127,6 +135,15 @@ float getAltitude(int32_t pressure, float temperature) {
 float lowpassfilter(float rawAltitude, float alpha){
 	filteredAltitude = (alpha*rawAltitude) + ((1.0f-alpha) * filteredAltitude);
 	return filteredAltitude;
+}
+
+
+void sendTelemetry(char* message) {
+    char buffer[200];
+    sprintf(buffer, "DURUM: %s\r\n"
+                    "Current Altitude: %.2f | Max Altitude: %.2f | State: %d | Temperature: %.2f\r\n",
+            message, currentRelativeAltitude, maxRelativeAltitude, (int)currentState, BMP180_GetTemperature());
+    HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
 }
 /* USER CODE END 0 */
 
@@ -202,7 +219,12 @@ int main(void)
  currentRelativeAltitude= filteredAltitude - groundAltitude;
 
 
-
+ uint32_t currentTime= HAL_GetTick();
+ if (currentTime - lastVTime >= 100) { // her 100msde bir hız hesapladık
+           verticalV = (currentRelativeAltitude - previousAltitude) / ((currentTime - lastVTime) / 1000.0f); // delta h / delta t yaparak m/s saniye cinsinden hızımızı bulduk
+           previousAltitude = currentRelativeAltitude;
+           lastVTime = currentTime;
+       }
 
 
  if(currentRelativeAltitude>maxRelativeAltitude){
@@ -227,8 +249,7 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
 		if(currentRelativeAltitude > LAUNCH_ALTITUDE_REACHED){
         currentState= ON_FLIGHT;
         launchTime=HAL_GetTick(); //burada fırlatma anındaki geçen zamanı aldık ve launchTime değişkenine atadık.
-
-
+        sendTelemetry("ROKET FIRLATILDI");
 
 		}
     break;
@@ -240,12 +261,15 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
 	case ON_FLIGHT:
 
 		 if((HAL_GetTick()-launchTime) > G_FORCE_DELAY_MS ){ //eğer o riskli G kuvveti bölgesindeysek burada apogee kontrolü de yapmıyoruz, break ile çıkış yapıyoruz doğrudan.
-   if(maxRelativeAltitude-currentRelativeAltitude>APOGEE_DROP_CONFIRM ){ //apogee kontrol
+   if(maxRelativeAltitude-currentRelativeAltitude>APOGEE_DROP_CONFIRM && verticalV < NEGATIVE_VELOCITY_CONFIRM_VALUE ){ //apogee kontrol
 
 	   launch_drag_parachute();// eğer apogee ulaşıldıysa ilk ayrılmayı gerçekleştirdik ve doğrudan FALLING state'ine geçtik
 	   currentState= FALLING;
+	   sendTelemetry("SURUKLENME PARASUTU ACILDI");
    }
+
 		 }
+
    break;
 
 
@@ -275,6 +299,7 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
     	 launch_main_parachute();
     	 HAL_Delay(10);
     	 currentState= LANDING;
+    	 sendTelemetry("ROKET DUSUSTE - IRTIFA AZALIYOR");
 
       }
 
@@ -285,8 +310,10 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
 
 
 	case LANDING:
-    if(currentRelativeAltitude<LANDING_ALTITUDE_REACHED){
+    if(currentRelativeAltitude<LANDING_ALTITUDE_REACHED && fabsf(verticalV)<LANDING_VELOCITY_CONFIRM_VALUE){// ek olarak dikey hızın mutlak değerine de baktık, sensör gürültüsünü hesaba katarak LANDING_VELOCITY_CONFIRM_VALUE değeriyle dikey hızı kontrol ettik
+
     	//landing gerçekleşti, gerekli uyarılar verilebilir.
+    	sendTelemetry("INIS GERCEKLESTI - ROKET RAMPADA");
     }
 
 		break;
