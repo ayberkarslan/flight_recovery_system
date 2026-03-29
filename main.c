@@ -42,7 +42,6 @@ typedef enum {
     ON_FLIGHT,                // Roket fırlatıldı, irtifa artıyor
     APOGEE_REACHED,        // Tepe noktası tespit edildi
     FALLING,               // Roket düşüşte
-    MAIN_PARACHUTE_DEPLOY, // Ana paraşüt tetiklenecek
     LANDING                 // Yere inildi, hareket bitti
 } FlightState;
 /* USER CODE END PTD */
@@ -52,8 +51,8 @@ typedef enum {
 // SİMÜLASYON VE UÇUŞ PARAMETRELERİ
 #define LAUNCH_ALTITUDE_REACHED  15.0f
 #define APOGEE_DROP_CONFIRM      5.0f
-#define MAIN_PARACHUTE_ALTITUDE         8000.0f
-#define FINAL_PARACHUTE_ALTITUDE     2000.0f
+#define MAIN_PARACHUTE_ALTITUDE         2000.0f
+#define DRAG_PARACHUTE_ALTITUDE     8000.0f
 #define LANDING_ALTITUDE_REACHED  10.0f
 
 #define LOW_PASS_ALPHA              0.2f    // low pass filtre katsayısı
@@ -79,9 +78,16 @@ float filteredAltitude = 0.0f;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+
 /* USER CODE BEGIN PFP */
 float getAltitude(int32_t pressure);
 float lowpassfilter(float rawAltitude);
+void launch_drag_parachute(){
+
+}
+void launch_main_parachute(){
+
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -171,7 +177,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1) {
       // 1. Sensörden Verileri Okuma
-      int32_t temperature = BMP180_GetRawTemperature();
+     // int32_t temperature = BMP180_GetRawTemperature();   gerek yok sıcaklığa şu an
       int32_t pressure = BMP180_GetPressure();
       float rawAltitude = getAltitude(pressure);// ham yüksekliği aldıktan sonra aşağıda low pass filtresine sokuyoruz
       lowpassfilter(rawAltitude);
@@ -194,7 +200,7 @@ int main(void)
 
 	case ON_FLIGHT:
 
-   if(maxRelativeAltitude-currentRelativeAltitude<APOGEE_DROP_CONFIRM && currentrelativeAltitude<maxRelativeAltitude ){ //apogee kontrol
+   if(maxRelativeAltitude-currentRelativeAltitude<APOGEE_DROP_CONFIRM && currentRelativeAltitude<maxRelativeAltitude ){ //apogee kontrol
  // hem apogee kontrolü için gereken düşüş yaşandı mı hem de bu max yüksekliğe ulaşıldaıktan sınra mı yapıldı diye kontrol ettik.
 	   currentState= APOGEE_REACHED;
    }
@@ -204,13 +210,47 @@ int main(void)
 
 	case APOGEE_REACHED:
 
-		//apogee ulaştığımıza göre
+
+		if(currentRelativeAltitude<DRAG_PARACHUTE_ALTITUDE){
+		//apogee ulaştığımızda burada bir drag paraşütü açacağız
+		launch_drag_parachute();
+        HAL_Delay(50); // paraşüt açıldıktan sonra ufak bir bekletme sonrasında state değiştireceğiz
+        currentState = FALLING;
+
+		}
+
+		else{
+		currentState = ON_FLIGHT;
+		}
 
 
 		break;
 
 
 
+
+
+	case FALLING:
+
+      if(currentRelativeAltitude<MAIN_PARACHUTE_ALTITUDE){
+    	 launch_main_parachute();
+    	 HAL_Delay(50);
+    	 currentState= LANDING;
+
+      }
+
+		break;
+
+
+
+
+
+	case LANDING:
+    if(currentRelativeAltitude<LANDING_ALTITUDE_REACHED){
+    	//landing gerçekleşti, gerekli uyarılar verilebilir.
+    }
+
+		break;
 
 
 
@@ -316,5 +356,5 @@ void assert_failed(uint8_t *file, uint32_t line)
      ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
-#endif /* USE_FULL_ASSERT */2
+#endif /* USE_FULL_ASSERT */
 
