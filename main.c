@@ -40,7 +40,7 @@
 typedef enum {
     WAITING_ON_PAD,        // Rampada fırlatma bekliyor
     ON_FLIGHT,                // Roket fırlatıldı, irtifa artıyor
-    APOGEE_REACHED,        // Tepe noktası tespit edildi
+   // APOGEE_REACHED,        // Tepe noktası tespit edildi //şu an gereksiz
     FALLING,               // Roket düşüşte
     LANDING                 // Yere inildi, hareket bitti
 } FlightState;
@@ -49,13 +49,32 @@ typedef enum {
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // SİMÜLASYON VE UÇUŞ PARAMETRELERİ
-#define LAUNCH_ALTITUDE_REACHED  15.0f
-#define APOGEE_DROP_CONFIRM      5.0f
-#define MAIN_PARACHUTE_ALTITUDE         2000.0f
-#define DRAG_PARACHUTE_ALTITUDE     8000.0f
-#define LANDING_ALTITUDE_REACHED  10.0f
+#define LAUNCH_ALTITUDE_REACHED	15.0f
+#define APOGEE_DROP_CONFIRM	5.0f
+#define MAIN_PARACHUTE_ALTITUDE	2000.0f
+#define DRAG_PARACHUTE_ALTITUDE	8000.0f
+#define LANDING_ALTITUDE_REACHED	10.0f
 
-#define LOW_PASS_ALPHA              0.2f    // low pass filtre katsayısı
+#define LOW_PASS_ALPHA	0.2f    // low pass filtre katsayısı
+
+
+// BMP180 sensörmüzn moduna göre maksimum okuma yapma sürelerini buldum ve bu sürelere göre bekleme yaptık döngü sonundaki HAL_Delay fonksiyonunda
+
+#define BMP180_MODE	3
+
+#if BMP180_MODE == 0
+#define SENSOR_WAIT_MS 10
+
+#elif BMP180_MODE == 1
+#define SENSOR_WAIT_MS 15
+
+#elif BMP180_MODE == 2
+#define SENSOR_WAIT_MS 25
+
+#elif BMP180_MODE == 3
+#define SENSOR_WAIT_MS 40
+
+#endif
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -148,28 +167,20 @@ int main(void)
   BMP180_UpdateCalibrationData();
   BMP180_SetOversampling(BMP180_ULTRA);
 
-  HAL_UART_Transmit(&huart2, (uint8_t*)"\r\n--- YRT ROKET KURTARMA SISTEMI ---\r\n", 40, 100);
-  HAL_UART_Transmit(&huart2, (uint8_t*)"Rampa kalibrasyonu yapiliyor...\r\n", 33, 100);
-
-  // 1. ADIM: RAMPA KALİBRASYONU VE FİLTRE OTURTMA
+  //RAMPA KALİBRASYONU VE FİLTRE OTURTMA
   // gerçek yüksekliğe ulaşmak için 25 kere çalıştırdık low pass filtresini
   for (int i = 0; i < 25; i++) {
       int32_t pressure = BMP180_GetPressure();
       float rawAlt = getAltitude(pressure);
       lowpassfilter(rawAlt); // Filtreyi besliyoruz
 
-      HAL_Delay(50); // Sensörün kendini toplaması için kısa bekleme
+      HAL_Delay(SENSOR_WAIT_MS); // Sensörün kendini toplaması için kısa bekleme - yine akıllı delay
   }
 
 
  groundAltitude = filteredAltitude;//ilk başta sensörü 25 kere çalıştırıp rampa yüksekliğimiz aldık, bu artık groundAltitude oldu.
 
-  currentRelativeAltitude = filteredAltitude-groundAltitude;
 
-
-  if(currentRelativeAltitude>maxRelativeAltitude){
-	  maxRelativeAltitude=currentRelativeAltitude;
-  }
 
   /* USER CODE END 2 */
 
@@ -181,6 +192,11 @@ int main(void)
       int32_t pressure = BMP180_GetPressure();
       float rawAltitude = getAltitude(pressure);// ham yüksekliği aldıktan sonra aşağıda low pass filtresine sokuyoruz
       lowpassfilter(rawAltitude);
+ currentRelativeAltitude= filteredAltitude - groundAltitude;
+
+ if(currentRelativeAltitude>maxRelativeAltitude){
+	  maxRelativeAltitude=currentRelativeAltitude;
+ }
 
 
 	switch(currentState){
@@ -200,21 +216,22 @@ int main(void)
 
 	case ON_FLIGHT:
 
-   if(maxRelativeAltitude-currentRelativeAltitude<APOGEE_DROP_CONFIRM && currentRelativeAltitude<maxRelativeAltitude ){ //apogee kontrol
- // hem apogee kontrolü için gereken düşüş yaşandı mı hem de bu max yüksekliğe ulaşıldaıktan sınra mı yapıldı diye kontrol ettik.
-	   currentState= APOGEE_REACHED;
+   if(maxRelativeAltitude-currentRelativeAltitude>APOGEE_DROP_CONFIRM ){ //apogee kontrol
+
+	   launch_drag_parachute();// eğer apogee ulaşıldıysa ilk ayrılmayı gerçekleştirdik ve doğrudan FALLING state'ine geçtik
+	   currentState= FALLING;
    }
    break;
 
 
 
-	case APOGEE_REACHED:
+/*	case APOGEE_REACHED: //burası gereksiz şu an çünkü yanlış bir sosnuz döngü oluşturuyordu
 
 
 		if(currentRelativeAltitude<DRAG_PARACHUTE_ALTITUDE){
 		//apogee ulaştığımızda burada bir drag paraşütü açacağız
 		launch_drag_parachute();
-        HAL_Delay(50); // paraşüt açıldıktan sonra ufak bir bekletme sonrasında state değiştireceğiz
+        HAL_Delay(10); // paraşüt açıldıktan sonra ufak bir bekletme sonrasında state değiştireceğiz
         currentState = FALLING;
 
 		}
@@ -225,16 +242,13 @@ int main(void)
 
 
 		break;
-
-
-
-
+*/
 
 	case FALLING:
 
       if(currentRelativeAltitude<MAIN_PARACHUTE_ALTITUDE){
     	 launch_main_parachute();
-    	 HAL_Delay(50);
+    	 HAL_Delay(10);
     	 currentState= LANDING;
 
       }
@@ -267,7 +281,7 @@ int main(void)
 
 
 
-
+HAL_Delay(SENSOR_WAIT_MS);//Döngümüz BMP'nin okuma hızını aşıp bmp'den boş veri aldığını zannetmesin diye akıllı bir delay koyduk
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
