@@ -40,7 +40,6 @@
 typedef enum {
     WAITING_ON_PAD,        // Rampada fırlatma bekliyor
     ON_FLIGHT,                // Roket fırlatıldı, irtifa artıyor
-   // APOGEE_REACHED,        // Tepe noktası tespit edildi //şu an gereksiz
     FALLING,               // Roket düşüşte
     LANDING                 // Yere inildi, hareket bitti
 } FlightState;
@@ -271,27 +270,6 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
 		 }
 
    break;
-
-
-
-/*	case APOGEE_REACHED: //burası gereksiz şu an çünkü yanlış bir sosnuz döngü oluşturuyordu
-
-
-		if(currentRelativeAltitude<DRAG_PARACHUTE_ALTITUDE){
-		//apogee ulaştığımızda burada bir drag paraşütü açacağız
-		launch_drag_parachute();
-        HAL_Delay(10); // paraşüt açıldıktan sonra ufak bir bekletme sonrasında state değiştireceğiz
-        currentState = FALLING;
-
-		}
-
-		else{
-		currentState = ON_FLIGHT;
-		}
-
-
-		break;
-*/
 
 	case FALLING:
 
