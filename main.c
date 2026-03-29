@@ -55,8 +55,10 @@ typedef enum {
 #define DRAG_PARACHUTE_ALTITUDE	8000.0f
 #define LANDING_ALTITUDE_REACHED	10.0f
 
-#define LOW_PASS_ALPHA	0.2f    // low pass filtre katsayısı
+#define G_FORCE_DELAY_MS  3000 //başta G kuvveti yüzünden bmp180'in verebileceği hatalı verilerden daha az etkilenmek amacıyla belirli bir süre low pass'daki
 
+#define LOW_PASS_ALPHA_NORMAL	0.2f    // low pass filtre katsayısı
+#define LOW_PASS_ALPHA_SECURE	0.05f
 
 // BMP180 sensörmüzn moduna göre maksimum okuma yapma sürelerini buldum ve bu sürelere göre bekleme yaptık döngü sonundaki HAL_Delay fonksiyonunda
 
@@ -93,14 +95,16 @@ float maxRelativeAltitude = 0.0f;     // Uçuş boyunca ulaşılan maksimum irti
 
 // Low-Pass Filtre Değişkeni
 float filteredAltitude = 0.0f;
+uint32_t launchTime = 0;
+float currentAlpha = LOW_PASS_ALPHA_NORMAL;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 
 /* USER CODE BEGIN PFP */
-float getAltitude(int32_t pressure);
-float lowpassfilter(float rawAltitude);
+float getAltitude(int32_t pressure, float temperature);
+float lowpassfilter(float rawAltitude, float alpha);
 void launch_drag_parachute(){
 
 }
@@ -113,14 +117,15 @@ void launch_main_parachute(){
 /* USER CODE BEGIN 0 */
 
 // Basınçtan Mutlak İrtifa Hesaplama
-float getAltitude(int32_t pressure) {
-    // 101325: Deniz seviyesi standart basıncı (pascal)
-    return 44330.0f * (1.0f - pow((float)pressure / 101325.0f, 0.190295f));
+float getAltitude(int32_t pressure, float temperature) {
+
+	float T_kelvin = temperature + 273.15f;
+	    return ((pow((101325.0f / (float)pressure), 1.0f/5.257f) - 1.0f) * T_kelvin) / 0.0065f;
 }
 
 // Sensör Gürültüsünü Engellemek İçin Low-Pass Filtresi
-float lowpassfilter(float rawAltitude){
-	filteredAltitude = (LOW_PASS_ALPHA*rawAltitude) + ((1.0f-LOW_PASS_ALPHA) * filteredAltitude);
+float lowpassfilter(float rawAltitude, float alpha){
+	filteredAltitude = (alpha*rawAltitude) + ((1.0f-alpha) * filteredAltitude);
 	return filteredAltitude;
 }
 /* USER CODE END 0 */
@@ -170,9 +175,10 @@ int main(void)
   //RAMPA KALİBRASYONU VE FİLTRE OTURTMA
   // gerçek yüksekliğe ulaşmak için 25 kere çalıştırdık low pass filtresini
   for (int i = 0; i < 25; i++) {
-      int32_t pressure = BMP180_GetPressure();
-      float rawAlt = getAltitude(pressure);
-      lowpassfilter(rawAlt); // Filtreyi besliyoruz
+	  int32_t temperature = BMP180_GetRawTemperature();
+	  int32_t pressure = BMP180_GetPressure();
+	       float rawAltitude = getAltitude(pressure,temperature);// ham yüksekliği aldıktan sonra aşağıda low pass filtresine sokuyoruz
+    lowpassfilter(rawAltitude, LOW_PASS_ALPHA_NORMAL); // Filtreyi besliyoruz
 
       HAL_Delay(SENSOR_WAIT_MS); // Sensörün kendini toplaması için kısa bekleme - yine akıllı delay
   }
@@ -188,14 +194,28 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1) {
       // 1. Sensörden Verileri Okuma
-     // int32_t temperature = BMP180_GetRawTemperature();   gerek yok sıcaklığa şu an
+      int32_t temperature = BMP180_GetRawTemperature();
       int32_t pressure = BMP180_GetPressure();
-      float rawAltitude = getAltitude(pressure);// ham yüksekliği aldıktan sonra aşağıda low pass filtresine sokuyoruz
-      lowpassfilter(rawAltitude);
+      float rawAltitude = getAltitude(pressure,temperature);// ham yüksekliği aldıktan sonra aşağıda low pass filtresine sokuyoruz
+      lowpassfilter(rawAltitude, currentAlpha);
+//lowpass filtresi bize filteredAltitude'yi verecek, onu ve rampa yüksekliğini kullanarak göreceli- aslında gerçek irtifayı alacağız
  currentRelativeAltitude= filteredAltitude - groundAltitude;
+
+
+
+
 
  if(currentRelativeAltitude>maxRelativeAltitude){
 	  maxRelativeAltitude=currentRelativeAltitude;
+ }
+
+
+ //eğer fırlatmadan bu yana geçen zaman G_FORCE_DELAY_MS değerimizden küçükse henüz güvenli G kuvveti bölgesinde değiliz demektir ve buradayken BMP verilerine daha az güveneceğiz. (low pass filtermizdeki alfa değeriyle oynayarak)
+ if(currentState==ON_FLIGHT && (HAL_GetTick()-launchTime) < G_FORCE_DELAY_MS ){
+	 currentAlpha= LOW_PASS_ALPHA_SECURE;
+ }
+ else{
+currentAlpha = LOW_PASS_ALPHA_NORMAL;
  }
 
 
@@ -206,6 +226,9 @@ int main(void)
 
 		if(currentRelativeAltitude > LAUNCH_ALTITUDE_REACHED){
         currentState= ON_FLIGHT;
+        launchTime=HAL_GetTick(); //burada fırlatma anındaki geçen zamanı aldık ve launchTime değişkenine atadık.
+
+
 
 		}
     break;
@@ -216,11 +239,13 @@ int main(void)
 
 	case ON_FLIGHT:
 
+		 if((HAL_GetTick()-launchTime) > G_FORCE_DELAY_MS ){ //eğer o riskli G kuvveti bölgesindeysek burada apogee kontrolü de yapmıyoruz, break ile çıkış yapıyoruz doğrudan.
    if(maxRelativeAltitude-currentRelativeAltitude>APOGEE_DROP_CONFIRM ){ //apogee kontrol
 
 	   launch_drag_parachute();// eğer apogee ulaşıldıysa ilk ayrılmayı gerçekleştirdik ve doğrudan FALLING state'ine geçtik
 	   currentState= FALLING;
    }
+		 }
    break;
 
 
