@@ -16,11 +16,11 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
 #include "dma.h"
+
 #include "i2c.h"
 #include "tim.h"
 #include "usart.h"
@@ -106,14 +106,14 @@ float currentAlpha = LOW_PASS_ALPHA_NORMAL;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-
 /* USER CODE BEGIN PFP */
 float getAltitude(int32_t pressure, float temperature);
 float lowpassfilter(float rawAltitude, float alpha);
 void launch_drag_parachute(){
-
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
 }
 void launch_main_parachute(){
+	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
 
 }
 
@@ -126,6 +126,11 @@ void sendTelemetry(char* message);
 // basınç ve sıcaklığı alarak daha keskin irtifa hesabı yaptık sadece basınç üzerinden hesap yapmaya kıyasla
 float getAltitude(int32_t pressure, float temperature) {
 
+
+
+	if(pressure <=0){
+		return filteredAltitude;
+	}
 	float T_kelvin = temperature + 273.15f;
 	    return ((pow((101325.0f / (float)pressure), 1.0f/5.257f) - 1.0f) * T_kelvin) / 0.0065f;
 }
@@ -152,6 +157,7 @@ void sendTelemetry(char* message) {
   */
 int main(void)
 {
+
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -182,7 +188,6 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM2_Init();
   MX_I2C1_Init();
-
   /* USER CODE BEGIN 2 */
   BMP180_Init(&hi2c1); //bmp ayarlarını yaptık
   BMP180_UpdateCalibrationData();
@@ -203,6 +208,21 @@ int main(void)
  groundAltitude = filteredAltitude;//ilk başta sensörü 25 kere çalıştırıp rampa yüksekliğimiz aldık, bu artık groundAltitude oldu.
 
 
+ // --- EKRANA SADECE BİR KERE YAZDIRILACAK BAŞLANGIÇ VERİLERİ ---
+   int32_t initialPressure = BMP180_GetPressure();
+   float initialTemperature = BMP180_GetTemperature();
+
+   char startupMsg[250];
+   sprintf(startupMsg, "\r\n================================================\r\n"
+                       "SISTEM BASLATILDI - RAMPADA BEKLENIYOR\r\n"
+                       "Baslangic Basinci: %ld Pa\r\n"
+                       "Baslangic Sicakligi: %.2f C\r\n"
+                       "Kalibre Edilen Rampa Irtifasi: %.2f m\r\n"
+                       "================================================\r\n\n",
+           initialPressure, initialTemperature, groundAltitude);
+
+   HAL_UART_Transmit(&huart2, (uint8_t*)startupMsg, strlen(startupMsg), 100);
+   // ---------------------------------------------------------------
 
   /* USER CODE END 2 */
 
@@ -265,6 +285,7 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
 	   launch_drag_parachute();// eğer apogee ulaşıldıysa ilk ayrılmayı gerçekleştirdik ve doğrudan FALLING state'ine geçtik
 	   currentState= FALLING;
 	   sendTelemetry("SURUKLENME PARASUTU ACILDI");
+
    }
 
 		 }
@@ -277,7 +298,7 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
     	 launch_main_parachute();
     	 HAL_Delay(10);
     	 currentState= LANDING;
-    	 sendTelemetry("ROKET DUSUSTE - IRTIFA AZALIYOR");
+    	 sendTelemetry("ANA PARASUT ACILDI");
 
       }
 
@@ -318,10 +339,6 @@ HAL_Delay(SENSOR_WAIT_MS);//Döngümüz BMP'nin okuma hızını aşıp bmp'den b
   }
   /* USER CODE END 3 */
 }
-
-/* USER CODE BEGIN 4 */
-
-/* USER CODE END 4 */
 
 /**
   * @brief System Clock Configuration
@@ -370,6 +387,10 @@ void SystemClock_Config(void)
   }
 }
 
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
 /**
   * @brief  This function is executed in case of error occurrence.
   * @retval None
@@ -384,11 +405,10 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  * where the assert_param error has occurred.
+  *         where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None
