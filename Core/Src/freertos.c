@@ -242,9 +242,25 @@ void sensorRead(void const * argument)
   for(;;)
   {
 
+	  int32_t temperature = BMP180_GetRawTemperature();
+	        int32_t pressure = BMP180_GetPressure();
+	        float rawAltitude = getAltitude(pressure,temperature);
 
+	        lowpassfilter(rawAltitude, currentAlpha);
+	        currentRelativeAltitude = filteredAltitude - groundAltitude;
 
-    osDelay(1);
+	        uint32_t currentTime = HAL_GetTick();
+	        if (currentTime - lastVTime >= 100) {
+	            verticalV = (currentRelativeAltitude - previousAltitude) / ((currentTime - lastVTime) / 1000.0f);
+	            previousAltitude = currentRelativeAltitude;
+	            lastVTime = currentTime;
+	        }
+
+	        if(currentRelativeAltitude > maxRelativeAltitude){
+	            maxRelativeAltitude = currentRelativeAltitude;
+	        }
+
+	        osDelay(SENSOR_WAIT_MS); // akilli bekleme
   }
   /* USER CODE END sensorRead */
 }
@@ -263,9 +279,11 @@ void dragParachute(void const * argument)
   for(;;)
   {
 
+	  if(osSemaphoreWait(dragSemHandle, osWaitForever) == osOK){
+	            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+	            sendTelemetry("SURUKLENME PARASUTU ACILDI");
+	        }
 
-
-    osDelay(1);
   }
   /* USER CODE END dragParachute */
 }
@@ -283,7 +301,12 @@ void mainParachute(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+
+	  // FSM'den semafor gelene kadar burada sonsuza dek bekleyecek
+	        if(osSemaphoreWait(mainSemHandle, osWaitForever) == osOK){
+	            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
+	            sendTelemetry("ANA PARASUT ACILDI");
+	        }
   }
   /* USER CODE END mainParachute */
 }
@@ -301,7 +324,89 @@ void stateMachine(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+ //eğer fırlatmadan bu yana geçen zaman G_FORCE_DELAY_MS değerimizden küçükse henüz güvenli G kuvveti bölgesinde değiliz demektir ve buradayken BMP verilerine daha az güveneceğiz. (low pass filtermizdeki alfa değeriyle oynayarak)
+ if(currentState==ON_FLIGHT && (HAL_GetTick()-launchTime) < G_FORCE_DELAY_MS ){
+	 currentAlpha= LOW_PASS_ALPHA_SECURE;
+ }
+ else{
+currentAlpha = LOW_PASS_ALPHA_NORMAL;
+ }
+
+
+	switch(currentState){
+
+
+	case WAITING_ON_PAD:
+
+		if(currentRelativeAltitude > LAUNCH_ALTITUDE_REACHED){
+        currentState= ON_FLIGHT;
+        launchTime=HAL_GetTick(); //burada fırlatma anındaki geçen zamanı aldık ve launchTime değişkenine atadık.
+        sendTelemetry("ROKET FIRLATILDI");
+
+		}
+    break;
+
+
+
+
+
+	case ON_FLIGHT:
+
+		 if((HAL_GetTick()-launchTime) > G_FORCE_DELAY_MS ){ //eğer o riskli G kuvveti bölgesindeysek burada apogee kontrolü de yapmıyoruz, break ile çıkış yapıyoruz doğrudan.
+   if(maxRelativeAltitude-currentRelativeAltitude>APOGEE_DROP_CONFIRM && verticalV < NEGATIVE_VELOCITY_CONFIRM_VALUE ){ //apogee kontrol
+
+	   osSemaphoreRelease(dragSemHandle);// eğer apogee ulaşıldıysa ilk ayrılmayı gerçekleştirdik ve doğrudan FALLING state'ine geçtik
+	   currentState= FALLING;
+	   sendTelemetry("SURUKLENME PARASUTU ACILDI");
+
+   }
+
+		 }
+
+   break;
+
+	case FALLING:
+
+      if(currentRelativeAltitude<MAIN_PARACHUTE_ALTITUDE){
+    	  osSemaphoreRelease(mainSemHandle);
+    	 currentState= LANDING;
+    	 sendTelemetry("ANA PARASUT ACILDI");
+
+      }
+
+		break;
+
+
+
+
+
+	case LANDING:
+    if(currentRelativeAltitude<LANDING_ALTITUDE_REACHED && fabsf(verticalV)<LANDING_VELOCITY_CONFIRM_VALUE){// ek olarak dikey hızın mutlak değerine de baktık, sensör gürültüsünü hesaba katarak LANDING_VELOCITY_CONFIRM_VALUE değeriyle dikey hızı kontrol ettik
+
+    	//landing gerçekleşti, gerekli uyarılar verilebilir.
+    	sendTelemetry("INIS GERCEKLESTI - ROKET RAMPADA");
+    	osDelay(500);
+    }
+
+		break;
+
+
+
+
+
+
+
+	}//switch sonu
+
+
+
+
+
+
+
+
+HAL_Delay(SENSOR_WAIT_MS);//Döngümüz BMP'nin okuma hızını aşıp bmp'den boş veri aldığını zannetmesin diye akıllı bir delay koyduk
+
   }
   /* USER CODE END stateMachine */
 }
