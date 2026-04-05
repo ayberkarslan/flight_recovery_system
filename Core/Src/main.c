@@ -42,6 +42,35 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
+#define LAUNCH_ALTITUDE_REACHED	15.0f
+#define APOGEE_DROP_CONFIRM	5.0f
+#define MAIN_PARACHUTE_ALTITUDE	2000.0f
+#define DRAG_PARACHUTE_ALTITUDE	8000.0f
+#define LANDING_ALTITUDE_REACHED	10.0f
+
+#define G_FORCE_DELAY_MS  3000
+
+#define LOW_PASS_ALPHA_NORMAL	0.2f
+#define LOW_PASS_ALPHA_SECURE	0.05f
+
+#define NEGATIVE_VELOCITY_CONFIRM_VALUE	-2.0f
+#define LANDING_VELOCITY_CONFIRM_VALUE  0.5f
+
+#define BMP180_MODE	3
+
+#if BMP180_MODE == 0
+#define SENSOR_WAIT_MS 10
+#elif BMP180_MODE == 1
+#define SENSOR_WAIT_MS 15
+#elif BMP180_MODE == 2
+#define SENSOR_WAIT_MS 25
+#elif BMP180_MODE == 3
+#define SENSOR_WAIT_MS 40
+#endif
+// #define gibi makrolar sadece yazıldıkları dosyalar için geçerli olduklarından dolayı aynılarını hem freertos.c'de hem de main.c'de bıraktık.
+
+
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
