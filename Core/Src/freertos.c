@@ -372,7 +372,7 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
       if(currentRelativeAltitude<MAIN_PARACHUTE_ALTITUDE){
     	  osSemaphoreRelease(mainSemHandle);
     	 currentState= LANDING;
-    	 sendTelemetry("ANA PARASUT ACILDI");
+    	// sendTelemetry("ANA PARASUT ACILDI");
 
       }
 
