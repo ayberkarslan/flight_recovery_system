@@ -97,6 +97,8 @@ uint32_t launchTime = 0;
 float currentAlpha = LOW_PASS_ALPHA_NORMAL;
 
 
+
+extern UART_HandleTypeDef huart2; //usartı tanısın diye exterb ile tanıttık
 /* USER CODE END Variables */
 osThreadId defaultTaskHandle;
 osThreadId sensorOkuHandle;
@@ -357,7 +359,7 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
 
 	   osSemaphoreRelease(dragSemHandle);// eğer apogee ulaşıldıysa ilk ayrılmayı gerçekleştirdik ve doğrudan FALLING state'ine geçtik
 	   currentState= FALLING;
-	   sendTelemetry("SURUKLENME PARASUTU ACILDI");
+	   // semaphore ile çağıracağımız fonskiyonda yazdıracağız zaten sendTelemetry("SURUKLENME PARASUTU ACILDI");
 
    }
 
@@ -405,7 +407,7 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
 
 
 
-HAL_Delay(SENSOR_WAIT_MS);//Döngümüz BMP'nin okuma hızını aşıp bmp'den boş veri aldığını zannetmesin diye akıllı bir delay koyduk
+osDelay(20);
 
   }
   /* USER CODE END stateMachine */

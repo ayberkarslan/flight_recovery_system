@@ -52,10 +52,18 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+extern float groundAltitude;
+extern float filteredAltitude;
 
+
+extern float getAltitude(int32_t pressure, float temperature);
+extern float lowpassfilter(float rawAltitude, float alpha);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+void MX_FREERTOS_Init(void);
+/* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
