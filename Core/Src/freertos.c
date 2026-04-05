@@ -105,6 +105,7 @@ osThreadId sensorOkuHandle;
 osThreadId drag_pHandle;
 osThreadId main_pHandle;
 osThreadId fsmHandle;
+osMutexId sensorMutexHandle;
 osSemaphoreId dragSemHandle;
 osSemaphoreId mainSemHandle;
 
@@ -159,6 +160,10 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
+  /* Create the mutex(es) */
+  /* definition and creation of sensorMutex */
+  osMutexDef(sensorMutex);
+  sensorMutexHandle = osMutexCreate(osMutex(sensorMutex));
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -249,6 +254,10 @@ void sensorRead(void const * argument)
 	        float rawAltitude = getAltitude(pressure,temperature);
 
 	        lowpassfilter(rawAltitude, currentAlpha);
+
+
+
+	        if(osMutexWait(sensorMutexHandle, osWaitForever) == osOK) { //mutexe aldık bu global değişkenleri, çok okunacak olanları
 	        currentRelativeAltitude = filteredAltitude - groundAltitude;
 
 	        uint32_t currentTime = HAL_GetTick();
@@ -261,6 +270,9 @@ void sensorRead(void const * argument)
 	        if(currentRelativeAltitude > maxRelativeAltitude){
 	            maxRelativeAltitude = currentRelativeAltitude;
 	        }
+
+	        osMutexRelease(sensorMutexHandle); //mutexi bıraktık değiştirmeler bitince
+	              }
 
 	        osDelay(SENSOR_WAIT_MS); // akilli bekleme
   }
@@ -335,6 +347,9 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
  }
 
 
+
+
+ if(osMutexWait(sensorMutexHandle, osWaitForever) == osOK) {
 	switch(currentState){
 
 
@@ -405,7 +420,8 @@ currentAlpha = LOW_PASS_ALPHA_NORMAL;
 
 
 
-
+	osMutexRelease(sensorMutexHandle);
+	      }
 
 osDelay(20);
 
