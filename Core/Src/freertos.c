@@ -167,11 +167,11 @@ void MX_FREERTOS_Init(void) {
   /* Create the semaphores(s) */
   /* definition and creation of dragSem */
   osSemaphoreDef(dragSem);
-  dragSemHandle = osSemaphoreCreate(osSemaphore(dragSem), 1);
+  dragSemHandle = osSemaphoreCreate(osSemaphore(dragSem), 0);
 
   /* definition and creation of mainSem */
   osSemaphoreDef(mainSem);
-  mainSemHandle = osSemaphoreCreate(osSemaphore(mainSem), 1);
+  mainSemHandle = osSemaphoreCreate(osSemaphore(mainSem), 0);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
