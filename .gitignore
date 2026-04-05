@@ -1,0 +1,17 @@
+# Derleme Çıktıları
+Debug/
+Release/
+*.bin
+*.elf
+*.list
+*.map
+*.hex
+
+# IDE Dosyaları (STM32CubeIDE / Eclipse)
+.settings/
+.launches/
+.language-assistant/
+
+# OS Kaynaklı Dosyalar
+.DS_Store
+Thumbs.db
