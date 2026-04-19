@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : YRT Rocket Recovery Flight Software (Low-Pass Filter)
+  * @brief          : Main program body
   ******************************************************************************
   * @attention
   *
@@ -20,7 +20,6 @@
 #include "main.h"
 #include "adc.h"
 #include "dma.h"
-
 #include "i2c.h"
 #include "tim.h"
 #include "usart.h"
@@ -28,57 +27,17 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <string.h>
-#include <stdio.h>
-#include <math.h>
-#include "bmp180_for_stm32_hal.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-// Uçuş state machine mantığı
-typedef enum {
-    WAITING_ON_PAD,        // Rampada fırlatma bekliyor
-    ON_FLIGHT,                // Roket fırlatıldı, irtifa artıyor
-    FALLING,               // Roket düşüşte
-    LANDING                 // Yere inildi, hareket bitti
-} FlightState;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// SİMÜLASYON VE UÇUŞ PARAMETRELERİ
-#define LAUNCH_ALTITUDE_REACHED	15.0f
-#define APOGEE_DROP_CONFIRM	5.0f
-#define MAIN_PARACHUTE_ALTITUDE	2000.0f
-#define DRAG_PARACHUTE_ALTITUDE	8000.0f
-#define LANDING_ALTITUDE_REACHED	10.0f
 
-#define G_FORCE_DELAY_MS  3000 //başta G kuvveti yüzünden bmp180'in verebileceği hatalı verilerden daha az etkilenmek amacıyla belirli bir süre low pass'daki
-
-#define LOW_PASS_ALPHA_NORMAL	0.2f    // low pass filtre katsayısı
-#define LOW_PASS_ALPHA_SECURE	0.05f
-
-
-#define NEGATIVE_VELOCITY_CONFIRM_VALUE	-2.0f
-#define LANDING_VELOCITY_CONFIRM_VALUE  0.5f
-// BMP180 sensörmüzn moduna göre maksimum okuma yapma sürelerini buldum ve bu sürelere göre bekleme yaptık döngü sonundaki HAL_Delay fonksiyonunda
-
-#define BMP180_MODE	3
-
-#if BMP180_MODE == 0
-#define SENSOR_WAIT_MS 10
-
-#elif BMP180_MODE == 1
-#define SENSOR_WAIT_MS 15
-
-#elif BMP180_MODE == 2
-#define SENSOR_WAIT_MS 25
-
-#elif BMP180_MODE == 3
-#define SENSOR_WAIT_MS 40
-
-#endif
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -87,68 +46,19 @@ typedef enum {
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-
 /* USER CODE BEGIN PV */
-FlightState currentState = WAITING_ON_PAD;
 
-float groundAltitude = 0.0f;     // Rampa kalibrasyon için iritifa değeri
-float currentRelativeAltitude = 0.0f; // Yere göre güncel filtrelenmiş irtifa
-float maxRelativeAltitude = 0.0f;     // Uçuş boyunca ulaşılan maksimum irtifa
-float previousAltitude = 0.0f;
-float verticalV = 0.0f;
-uint32_t lastVTime = 0.0f;
-
-// Low-Pass Filtre Değişkeni
-float filteredAltitude = 0.0f;
-uint32_t launchTime = 0;
-float currentAlpha = LOW_PASS_ALPHA_NORMAL;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-float getAltitude(int32_t pressure, float temperature);
-float lowpassfilter(float rawAltitude, float alpha);
-void launch_drag_parachute(){
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
-}
-void launch_main_parachute(){
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
 
-}
-
-void sendTelemetry(char* message);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-// basınç ve sıcaklığı alarak daha keskin irtifa hesabı yaptık sadece basınç üzerinden hesap yapmaya kıyasla
-float getAltitude(int32_t pressure, float temperature) {
-
-
-
-	if(pressure <=0){
-		return filteredAltitude;
-	}
-	float T_kelvin = temperature + 273.15f;
-	    return ((pow((101325.0f / (float)pressure), 1.0f/5.257f) - 1.0f) * T_kelvin) / 0.0065f;
-}
-
-// Sensör Gürültüsünü Engellemek İçin Low-Pass Filtresi
-float lowpassfilter(float rawAltitude, float alpha){
-	filteredAltitude = (alpha*rawAltitude) + ((1.0f-alpha) * filteredAltitude);
-	return filteredAltitude;
-}
-
-
-void sendTelemetry(char* message) {
-    char buffer[200];
-    sprintf(buffer, "DURUM: %s\r\n"
-                    "Current Altitude: %.2f | Max Altitude: %.2f | State: %d | Temperature: %.2f\r\n",
-            message, currentRelativeAltitude, maxRelativeAltitude, (int)currentState, BMP180_GetTemperature());
-    HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
-}
 /* USER CODE END 0 */
 
 /**
@@ -157,7 +67,6 @@ void sendTelemetry(char* message) {
   */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
@@ -189,150 +98,13 @@ int main(void)
   MX_TIM2_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-  BMP180_Init(&hi2c1); //bmp ayarlarını yaptık
-  BMP180_UpdateCalibrationData();
-  BMP180_SetOversampling(BMP180_ULTRA);
-
-  //RAMPA KALİBRASYONU VE FİLTRE OTURTMA
-  // gerçek yüksekliğe ulaşmak için 25 kere çalıştırdık low pass filtresini
-  for (int i = 0; i < 25; i++) {
-	  int32_t temperature = BMP180_GetRawTemperature();
-	  int32_t pressure = BMP180_GetPressure();
-	       float rawAltitude = getAltitude(pressure,temperature);// ham yüksekliği aldıktan sonra aşağıda low pass filtresine sokuyoruz
-    lowpassfilter(rawAltitude, LOW_PASS_ALPHA_NORMAL); // Filtreyi besliyoruz
-
-      HAL_Delay(SENSOR_WAIT_MS); // Sensörün kendini toplaması için kısa bekleme - yine akıllı delay
-  }
-
-
- groundAltitude = filteredAltitude;//ilk başta sensörü 25 kere çalıştırıp rampa yüksekliğimiz aldık, bu artık groundAltitude oldu.
-
-
- // --- EKRANA SADECE BİR KERE YAZDIRILACAK BAŞLANGIÇ VERİLERİ ---
-   int32_t initialPressure = BMP180_GetPressure();
-   float initialTemperature = BMP180_GetTemperature();
-
-   char startupMsg[250];
-   sprintf(startupMsg, "\r\n================================================\r\n"
-                       "SISTEM BASLATILDI - RAMPADA BEKLENIYOR\r\n"
-                       "Baslangic Basinci: %ld Pa\r\n"
-                       "Baslangic Sicakligi: %.2f C\r\n"
-                       "Kalibre Edilen Rampa Irtifasi: %.2f m\r\n"
-                       "================================================\r\n\n",
-           initialPressure, initialTemperature, groundAltitude);
-
-   HAL_UART_Transmit(&huart2, (uint8_t*)startupMsg, strlen(startupMsg), 100);
-   // ---------------------------------------------------------------
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1) {
-      // 1. Sensörden Verileri Okuma
-      int32_t temperature = BMP180_GetRawTemperature();
-      int32_t pressure = BMP180_GetPressure();
-      float rawAltitude = getAltitude(pressure,temperature);// ham yüksekliği aldıktan sonra aşağıda low pass filtresine sokuyoruz
-      lowpassfilter(rawAltitude, currentAlpha);
-//lowpass filtresi bize filteredAltitude'yi verecek, onu ve rampa yüksekliğini kullanarak göreceli- aslında gerçek irtifayı alacağız
- currentRelativeAltitude= filteredAltitude - groundAltitude;
-
-
- uint32_t currentTime= HAL_GetTick();
- if (currentTime - lastVTime >= 100) { // her 100msde bir hız hesapladık
-           verticalV = (currentRelativeAltitude - previousAltitude) / ((currentTime - lastVTime) / 1000.0f); // delta h / delta t yaparak m/s saniye cinsinden hızımızı bulduk
-           previousAltitude = currentRelativeAltitude;
-           lastVTime = currentTime;
-       }
-
-
- if(currentRelativeAltitude>maxRelativeAltitude){
-	  maxRelativeAltitude=currentRelativeAltitude;
- }
-
-
- //eğer fırlatmadan bu yana geçen zaman G_FORCE_DELAY_MS değerimizden küçükse henüz güvenli G kuvveti bölgesinde değiliz demektir ve buradayken BMP verilerine daha az güveneceğiz. (low pass filtermizdeki alfa değeriyle oynayarak)
- if(currentState==ON_FLIGHT && (HAL_GetTick()-launchTime) < G_FORCE_DELAY_MS ){
-	 currentAlpha= LOW_PASS_ALPHA_SECURE;
- }
- else{
-currentAlpha = LOW_PASS_ALPHA_NORMAL;
- }
-
-
-	switch(currentState){
-
-
-	case WAITING_ON_PAD:
-
-		if(currentRelativeAltitude > LAUNCH_ALTITUDE_REACHED){
-        currentState= ON_FLIGHT;
-        launchTime=HAL_GetTick(); //burada fırlatma anındaki geçen zamanı aldık ve launchTime değişkenine atadık.
-        sendTelemetry("ROKET FIRLATILDI");
-
-		}
-    break;
-
-
-
-
-
-	case ON_FLIGHT:
-
-		 if((HAL_GetTick()-launchTime) > G_FORCE_DELAY_MS ){ //eğer o riskli G kuvveti bölgesindeysek burada apogee kontrolü de yapmıyoruz, break ile çıkış yapıyoruz doğrudan.
-   if(maxRelativeAltitude-currentRelativeAltitude>APOGEE_DROP_CONFIRM && verticalV < NEGATIVE_VELOCITY_CONFIRM_VALUE ){ //apogee kontrol
-
-	   launch_drag_parachute();// eğer apogee ulaşıldıysa ilk ayrılmayı gerçekleştirdik ve doğrudan FALLING state'ine geçtik
-	   currentState= FALLING;
-	   sendTelemetry("SURUKLENME PARASUTU ACILDI");
-
-   }
-
-		 }
-
-   break;
-
-	case FALLING:
-
-      if(currentRelativeAltitude<MAIN_PARACHUTE_ALTITUDE){
-    	 launch_main_parachute();
-    	 HAL_Delay(10);
-    	 currentState= LANDING;
-    	 sendTelemetry("ANA PARASUT ACILDI");
-
-      }
-
-		break;
-
-
-
-
-
-	case LANDING:
-    if(currentRelativeAltitude<LANDING_ALTITUDE_REACHED && fabsf(verticalV)<LANDING_VELOCITY_CONFIRM_VALUE){// ek olarak dikey hızın mutlak değerine de baktık, sensör gürültüsünü hesaba katarak LANDING_VELOCITY_CONFIRM_VALUE değeriyle dikey hızı kontrol ettik
-
-    	//landing gerçekleşti, gerekli uyarılar verilebilir.
-    	sendTelemetry("INIS GERCEKLESTI - ROKET RAMPADA");
-    }
-
-		break;
-
-
-
-
-
-
-
-	}//switch sonu
-
-
-
-
-
-
-
-
-HAL_Delay(SENSOR_WAIT_MS);//Döngümüz BMP'nin okuma hızını aşıp bmp'den boş veri aldığını zannetmesin diye akıllı bir delay koyduk
+  while (1)
+  {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -405,10 +177,11 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-#ifdef USE_FULL_ASSERT
+
+#ifdef  USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
+  * where the assert_param error has occurred.
   * @param  file: pointer to the source file name
   * @param  line: assert_param error line source number
   * @retval None
@@ -421,4 +194,3 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-

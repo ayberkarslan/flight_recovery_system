@@ -25,54 +25,45 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <string.h>
+#include <stdio.h>
+#include <math.h>
+#include "mpu6050.h"
+#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-// Uçuş state machine mantığı
+
 typedef enum {
-    WAITING_ON_PAD,        // Rampada fırlatma bekliyor
-    ON_FLIGHT,                // Roket fırlatıldı, irtifa artıyor
-    FALLING,               // Roket düşüşte
-    LANDING                 // Yere inildi, hareket bitti
-} FlightState;
+
+	ON_FLIGHT,
+	APOGEE_REACHED
+
+
+}FlightState;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// SİMÜLASYON VE UÇUŞ PARAMETRELERİ
-#define LAUNCH_ALTITUDE_REACHED	15.0f
-#define APOGEE_DROP_CONFIRM	5.0f
-#define MAIN_PARACHUTE_ALTITUDE	2000.0f
-#define DRAG_PARACHUTE_ALTITUDE	8000.0f
-#define LANDING_ALTITUDE_REACHED	10.0f
-
-#define G_FORCE_DELAY_MS  3000 //başta G kuvveti yüzünden bmp180'in verebileceği hatalı verilerden daha az etkilenmek amacıyla belirli bir süre low pass'daki
-
-#define LOW_PASS_ALPHA_NORMAL	0.2f    // low pass filtre katsayısı
-#define LOW_PASS_ALPHA_SECURE	0.05f
 
 
-#define NEGATIVE_VELOCITY_CONFIRM_VALUE	-2.0f
-#define LANDING_VELOCITY_CONFIRM_VALUE  0.5f
-// BMP180 sensörmüzn moduna göre maksimum okuma yapma sürelerini buldum ve bu sürelere göre bekleme yaptık döngü sonundaki HAL_Delay fonksiyonunda
+extern char serialBuffer[];
+extern char serialBuffer2[];
 
-#define BMP180_MODE	3
+extern double rollOffset;
 
-#if BMP180_MODE == 0
-#define SENSOR_WAIT_MS 10
+extern double pitchOffset;
 
-#elif BMP180_MODE == 1
-#define SENSOR_WAIT_MS 15
+extern MPU6050_t mpuSensor;
 
-#elif BMP180_MODE == 2
-#define SENSOR_WAIT_MS 25
 
-#elif BMP180_MODE == 3
-#define SENSOR_WAIT_MS 40
 
-#endif
+extern double rollFinal;
+extern double pitchFinal;
+extern FlightState currentState;
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -82,56 +73,21 @@ typedef enum {
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-FlightState currentState = WAITING_ON_PAD;
 
-float groundAltitude = 0.0f;     // Rampa kalibrasyon için iritifa değeri
-float currentRelativeAltitude = 0.0f; // Yere göre güncel filtrelenmiş irtifa
-float maxRelativeAltitude = 0.0f;     // Uçuş boyunca ulaşılan maksimum irtifa
-float previousAltitude = 0.0f;
-float verticalV = 0.0f;
-uint32_t lastVTime = 0.0f;
-
-// Low-Pass Filtre Değişkeni
-float filteredAltitude = 0.0f;
-uint32_t launchTime = 0;
-float currentAlpha = LOW_PASS_ALPHA_NORMAL;
-
-
-
-extern UART_HandleTypeDef huart2; //usartı tanısın diye exterb ile tanıttık
 /* USER CODE END Variables */
 osThreadId defaultTaskHandle;
-osThreadId sensorOkuHandle;
-osThreadId drag_pHandle;
-osThreadId main_pHandle;
-osThreadId fsmHandle;
-osMutexId sensorMutexHandle;
-osSemaphoreId dragSemHandle;
-osSemaphoreId mainSemHandle;
+osThreadId SensorOkumasiHandle;
+osThreadId SeriPortYazdirHandle;
+osMutexId myMutex01Handle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-void SystemClock_Config(void);
-void MX_FREERTOS_Init(void);
-/* USER CODE BEGIN PFP */
-float getAltitude(int32_t pressure, float temperature);
-float lowpassfilter(float rawAltitude, float alpha);
-void launch_drag_parachute(){
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
-}
-void launch_main_parachute(){
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
 
-}
-
-void sendTelemetry(char* message);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void const * argument);
-void sensorRead(void const * argument);
-void dragParachute(void const * argument);
-void mainParachute(void const * argument);
-void stateMachine(void const * argument);
+void readSensor(void const * argument);
+void serialWrite(void const * argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -161,22 +117,13 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE END Init */
   /* Create the mutex(es) */
-  /* definition and creation of sensorMutex */
-  osMutexDef(sensorMutex);
-  sensorMutexHandle = osMutexCreate(osMutex(sensorMutex));
+  /* definition and creation of myMutex01 */
+  osMutexDef(myMutex01);
+  myMutex01Handle = osMutexCreate(osMutex(myMutex01));
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
-
-  /* Create the semaphores(s) */
-  /* definition and creation of dragSem */
-  osSemaphoreDef(dragSem);
-  dragSemHandle = osSemaphoreCreate(osSemaphore(dragSem), 0);
-
-  /* definition and creation of mainSem */
-  osSemaphoreDef(mainSem);
-  mainSemHandle = osSemaphoreCreate(osSemaphore(mainSem), 0);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
@@ -195,21 +142,13 @@ void MX_FREERTOS_Init(void) {
   osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 128);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
-  /* definition and creation of sensorOku */
-  osThreadDef(sensorOku, sensorRead, osPriorityRealtime, 0, 128);
-  sensorOkuHandle = osThreadCreate(osThread(sensorOku), NULL);
+  /* definition and creation of SensorOkumasi */
+  osThreadDef(SensorOkumasi, readSensor, osPriorityRealtime, 0, 512);
+  SensorOkumasiHandle = osThreadCreate(osThread(SensorOkumasi), NULL);
 
-  /* definition and creation of drag_p */
-  osThreadDef(drag_p, dragParachute, osPriorityAboveNormal, 0, 128);
-  drag_pHandle = osThreadCreate(osThread(drag_p), NULL);
-
-  /* definition and creation of main_p */
-  osThreadDef(main_p, mainParachute, osPriorityAboveNormal, 0, 128);
-  main_pHandle = osThreadCreate(osThread(main_p), NULL);
-
-  /* definition and creation of fsm */
-  osThreadDef(fsm, stateMachine, osPriorityHigh, 0, 128);
-  fsmHandle = osThreadCreate(osThread(fsm), NULL);
+  /* definition and creation of SeriPortYazdir */
+  osThreadDef(SeriPortYazdir, serialWrite, osPriorityHigh, 0, 512);
+  SeriPortYazdirHandle = osThreadCreate(osThread(SeriPortYazdir), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -235,226 +174,129 @@ void StartDefaultTask(void const * argument)
   /* USER CODE END StartDefaultTask */
 }
 
-/* USER CODE BEGIN Header_sensorRead */
+/* USER CODE BEGIN Header_readSensor */
 /**
-* @brief Function implementing the sensorOku thread.
+* @brief Function implementing the SensorOkumasi thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_sensorRead */
-void sensorRead(void const * argument)
+/* USER CODE END Header_readSensor */
+void readSensor(void const * argument)
 {
-  /* USER CODE BEGIN sensorRead */
+  /* USER CODE BEGIN readSensor */
   /* Infinite loop */
   for(;;)
   {
 
-	  int32_t temperature = BMP180_GetRawTemperature();
-	        int32_t pressure = BMP180_GetPressure();
-	        float rawAltitude = getAltitude(pressure,temperature);
 
-	        lowpassfilter(rawAltitude, currentAlpha);
+
+	  if (osMutexWait(myMutex01Handle, osWaitForever) == osOK) {
 
 
 
-	        if(osMutexWait(sensorMutexHandle, osWaitForever) == osOK) { //mutexe aldık bu global değişkenleri, çok okunacak olanları
-	        currentRelativeAltitude = filteredAltitude - groundAltitude;
 
-	        uint32_t currentTime = HAL_GetTick();
-	        if (currentTime - lastVTime >= 100) {
-	            verticalV = (currentRelativeAltitude - previousAltitude) / ((currentTime - lastVTime) / 1000.0f);
-	            previousAltitude = currentRelativeAltitude;
-	            lastVTime = currentTime;
-	        }
+		  MPU6050_Read_All(&hi2c1, &mpuSensor);
 
-	        if(currentRelativeAltitude > maxRelativeAltitude){
-	            maxRelativeAltitude = currentRelativeAltitude;
-	        }
 
-	        osMutexRelease(sensorMutexHandle); //mutexi bıraktık değiştirmeler bitince
-	              }
 
-	        osDelay(SENSOR_WAIT_MS); // akilli bekleme
+		  		rollFinal= mpuSensor.KalmanAngleX + rollOffset;
+		  	    pitchFinal= mpuSensor.KalmanAngleY + pitchOffset;
+
+		  switch(currentState){
+
+		  case ON_FLIGHT:
+
+		  	if(fabs(pitchFinal)>45.00){
+		  		//sprintf( serialBuffer2, "Pitch degerine ulasildi \r\n");
+
+		  			//	HAL_UART_Transmit(&huart2, (uint8_t*)serialBuffer2, strlen(serialBuffer2),2000);
+		  	  currentState = APOGEE_REACHED;
+		  		HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+		  	}
+
+		  	else{
+		  		//sprintf( serialBuffer2, "ULASILMADI \r\n");
+
+		  			//		HAL_UART_Transmit(&huart2, (uint8_t*)serialBuffer2, strlen(serialBuffer2),2000);
+
+		  					currentState = ON_FLIGHT;
+		  	}
+
+		  	break;
+
+
+
+
+		  case APOGEE_REACHED:
+
+	//aşağıda sensçr yazmasında burayı doldurduk.
+		  	break;
+
+
+		  }
+
+		  osMutexRelease(myMutex01Handle);
+	  }
+
+	  osDelay(50);
   }
-  /* USER CODE END sensorRead */
+  /* USER CODE END readSensor */
 }
 
-/* USER CODE BEGIN Header_dragParachute */
+/* USER CODE BEGIN Header_serialWrite */
 /**
-* @brief Function implementing the drag_p thread.
+* @brief Function implementing the SeriPortYazdir thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_dragParachute */
-void dragParachute(void const * argument)
+/* USER CODE END Header_serialWrite */
+void serialWrite(void const * argument)
 {
-  /* USER CODE BEGIN dragParachute */
+  /* USER CODE BEGIN serialWrite */
   /* Infinite loop */
   for(;;)
   {
+	  FlightState temporaryState;
 
-	  if(osSemaphoreWait(dragSemHandle, osWaitForever) == osOK){
-	            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
-	            sendTelemetry("SURUKLENME PARASUTU ACILDI");
-	        }
+	  if (osMutexWait(myMutex01Handle, osWaitForever) == osOK) {
+	  sprintf( serialBuffer, "Pitch: %.2f | Roll: %.2f | Acc(G): X:%.2f Y:%.2f Z:%.2f | Gyro: X:%.2f Y:%.2f Z:%.2f\r\n",
+	  pitchFinal,
+	  rollFinal,
+	  mpuSensor.Ax,
+	  mpuSensor.Ay,
+	  mpuSensor.Az,
+	  mpuSensor.Gx,
+	  mpuSensor.Gy,
+	  mpuSensor.Gz
+	  );
 
+
+
+	  temporaryState= currentState;
+
+    osMutexRelease(myMutex01Handle);
   }
-  /* USER CODE END dragParachute */
-}
-
-/* USER CODE BEGIN Header_mainParachute */
-/**
-* @brief Function implementing the main_p thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_mainParachute */
-void mainParachute(void const * argument)
-{
-  /* USER CODE BEGIN mainParachute */
-  /* Infinite loop */
-  for(;;)
-  {
-
-	  // FSM'den semafor gelene kadar burada sonsuza dek bekleyecek
-	        if(osSemaphoreWait(mainSemHandle, osWaitForever) == osOK){
-	            HAL_GPIO_WritePin(GPIOA, GPIO_PIN_6, GPIO_PIN_SET);
-	            sendTelemetry("ANA PARASUT ACILDI");
-	        }
-  }
-  /* USER CODE END mainParachute */
-}
-
-/* USER CODE BEGIN Header_stateMachine */
-/**
-* @brief Function implementing the fsm thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_stateMachine */
-void stateMachine(void const * argument)
-{
-  /* USER CODE BEGIN stateMachine */
-  /* Infinite loop */
-  for(;;)
-  {
- //eğer fırlatmadan bu yana geçen zaman G_FORCE_DELAY_MS değerimizden küçükse henüz güvenli G kuvveti bölgesinde değiliz demektir ve buradayken BMP verilerine daha az güveneceğiz. (low pass filtermizdeki alfa değeriyle oynayarak)
- if(currentState==ON_FLIGHT && (HAL_GetTick()-launchTime) < G_FORCE_DELAY_MS ){
-	 currentAlpha= LOW_PASS_ALPHA_SECURE;
- }
- else{
-currentAlpha = LOW_PASS_ALPHA_NORMAL;
- }
 
 
 
 
- if(osMutexWait(sensorMutexHandle, osWaitForever) == osOK) {
-	switch(currentState){
+	  HAL_UART_Transmit(&huart2, (uint8_t*)serialBuffer, strlen(serialBuffer),2000);
 
 
-	case WAITING_ON_PAD:
-
-		if(currentRelativeAltitude > LAUNCH_ALTITUDE_REACHED){
-        currentState= ON_FLIGHT;
-        launchTime=HAL_GetTick(); //burada fırlatma anındaki geçen zamanı aldık ve launchTime değişkenine atadık.
-        sendTelemetry("ROKET FIRLATILDI");
-
-		}
-    break;
+	 if(temporaryState==APOGEE_REACHED){
+	  sprintf(serialBuffer2, "APOGEE ULASILDI \r\n");
+	  HAL_UART_Transmit(&huart2, (uint8_t*)serialBuffer2, strlen(serialBuffer2),2000);
 
 
+	  }
+	 osDelay(100);
 
 
-
-	case ON_FLIGHT:
-
-		 if((HAL_GetTick()-launchTime) > G_FORCE_DELAY_MS ){ //eğer o riskli G kuvveti bölgesindeysek burada apogee kontrolü de yapmıyoruz, break ile çıkış yapıyoruz doğrudan.
-   if(maxRelativeAltitude-currentRelativeAltitude>APOGEE_DROP_CONFIRM && verticalV < NEGATIVE_VELOCITY_CONFIRM_VALUE ){ //apogee kontrol
-
-	   osSemaphoreRelease(dragSemHandle);// eğer apogee ulaşıldıysa ilk ayrılmayı gerçekleştirdik ve doğrudan FALLING state'ine geçtik
-	   currentState= FALLING;
-	   // semaphore ile çağıracağımız fonskiyonda yazdıracağız zaten sendTelemetry("SURUKLENME PARASUTU ACILDI");
-
-   }
-
-		 }
-
-   break;
-
-	case FALLING:
-
-      if(currentRelativeAltitude<MAIN_PARACHUTE_ALTITUDE){
-    	  osSemaphoreRelease(mainSemHandle);
-    	 currentState= LANDING;
-    	// sendTelemetry("ANA PARASUT ACILDI");
-
-      }
-
-		break;
-
-
-
-
-
-	case LANDING:
-    if(currentRelativeAltitude<LANDING_ALTITUDE_REACHED && fabsf(verticalV)<LANDING_VELOCITY_CONFIRM_VALUE){// ek olarak dikey hızın mutlak değerine de baktık, sensör gürültüsünü hesaba katarak LANDING_VELOCITY_CONFIRM_VALUE değeriyle dikey hızı kontrol ettik
-
-    	//landing gerçekleşti, gerekli uyarılar verilebilir.
-    	sendTelemetry("INIS GERCEKLESTI - ROKET RAMPADA");
-    	osDelay(500);
-    }
-
-		break;
-
-
-
-
-
-
-
-	}//switch sonu
-
-
-
-
-
-
-	osMutexRelease(sensorMutexHandle);
-	      }
-
-osDelay(20);
-
-  }
-  /* USER CODE END stateMachine */
+	  }
+  /* USER CODE END serialWrite */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-// basınç ve sıcaklığı alarak daha keskin irtifa hesabı yaptık sadece basınç üzerinden hesap yapmaya kıyasla
-float getAltitude(int32_t pressure, float temperature) {
 
-
-
-	if(pressure <=0){
-		return filteredAltitude;
-	}
-	float T_kelvin = temperature + 273.15f;
-	    return ((pow((101325.0f / (float)pressure), 1.0f/5.257f) - 1.0f) * T_kelvin) / 0.0065f;
-}
-
-// Sensör Gürültüsünü Engellemek İçin Low-Pass Filtresi
-float lowpassfilter(float rawAltitude, float alpha){
-	filteredAltitude = (alpha*rawAltitude) + ((1.0f-alpha) * filteredAltitude);
-	return filteredAltitude;
-}
-
-
-void sendTelemetry(char* message) {
-    char buffer[200];
-    sprintf(buffer, "DURUM: %s\r\n"
-                    "Current Altitude: %.2f | Max Altitude: %.2f | State: %d | Temperature: %.2f\r\n",
-            message, currentRelativeAltitude, maxRelativeAltitude, (int)currentState, BMP180_GetTemperature());
-    HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 100);
-}
 /* USER CODE END Application */

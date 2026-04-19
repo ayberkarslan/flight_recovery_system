@@ -31,44 +31,24 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
-#include "bmp180_for_stm32_hal.h"
+#include "mpu6050.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
+
+typedef enum {
+
+	ON_FLIGHT,
+	APOGEE_REACHED
+
+
+}FlightState;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-#define LAUNCH_ALTITUDE_REACHED	15.0f
-#define APOGEE_DROP_CONFIRM	5.0f
-#define MAIN_PARACHUTE_ALTITUDE	2000.0f
-#define DRAG_PARACHUTE_ALTITUDE	8000.0f
-#define LANDING_ALTITUDE_REACHED	10.0f
-
-#define G_FORCE_DELAY_MS  3000
-
-#define LOW_PASS_ALPHA_NORMAL	0.2f
-#define LOW_PASS_ALPHA_SECURE	0.05f
-
-#define NEGATIVE_VELOCITY_CONFIRM_VALUE	-2.0f
-#define LANDING_VELOCITY_CONFIRM_VALUE  0.5f
-
-#define BMP180_MODE	3
-
-#if BMP180_MODE == 0
-#define SENSOR_WAIT_MS 10
-#elif BMP180_MODE == 1
-#define SENSOR_WAIT_MS 15
-#elif BMP180_MODE == 2
-#define SENSOR_WAIT_MS 25
-#elif BMP180_MODE == 3
-#define SENSOR_WAIT_MS 40
-#endif
-// #define gibi makrolar sadece yazıldıkları dosyalar için geçerli olduklarından dolayı aynılarını hem freertos.c'de hem de main.c'de bıraktık.
-
 
 
 /* USER CODE END PD */
@@ -81,12 +61,20 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-extern float groundAltitude;
-extern float filteredAltitude;
+MPU6050_t mpuSensor;
+
+char serialBuffer[100];
+char serialBuffer2[100];
+
+double rollOffset = 2;
+
+double pitchOffset = 2;
 
 
-extern float getAltitude(int32_t pressure, float temperature);
-extern float lowpassfilter(float rawAltitude, float alpha);
+double rollFinal;
+double pitchFinal;
+
+FlightState currentState;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -111,6 +99,7 @@ int main(void)
 
   /* USER CODE BEGIN 1 */
 
+currentState= ON_FLIGHT;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -140,40 +129,10 @@ int main(void)
   MX_TIM2_Init();
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-  BMP180_Init(&hi2c1); //bmp ayarlarını yaptık
-  BMP180_UpdateCalibrationData();
-  BMP180_SetOversampling(BMP180_ULTRA);
 
-  //RAMPA KALİBRASYONU VE FİLTRE OTURTMA
-  // gerçek yüksekliğe ulaşmak için 25 kere çalıştırdık low pass filtresini
-  for (int i = 0; i < 25; i++) {
-	  int32_t temperature = BMP180_GetRawTemperature();
-	  int32_t pressure = BMP180_GetPressure();
-	       float rawAltitude = getAltitude(pressure,temperature);// ham yüksekliği aldıktan sonra aşağıda low pass filtresine sokuyoruz
-    lowpassfilter(rawAltitude, LOW_PASS_ALPHA_NORMAL); // Filtreyi besliyoruz
-
-      HAL_Delay(SENSOR_WAIT_MS); // Sensörün kendini toplaması için kısa bekleme - yine akıllı delay
+  while (MPU6050_Init(&hi2c1)==1) {
+    //eğer sensör başlatılamazsa burada sonsuza kadar bekleyeceğiz
   }
-
-
- groundAltitude = filteredAltitude;//ilk başta sensörü 25 kere çalıştırıp rampa yüksekliğimiz aldık, bu artık groundAltitude oldu.
-
-
- // --- EKRANA SADECE BİR KERE YAZDIRILACAK BAŞLANGIÇ VERİLERİ ---
-   int32_t initialPressure = BMP180_GetPressure();
-   float initialTemperature = BMP180_GetTemperature();
-
-   char startupMsg[250];
-   sprintf(startupMsg, "\r\n================================================\r\n"
-                       "SISTEM BASLATILDI - RAMPADA BEKLENIYOR\r\n"
-                       "Baslangic Basinci: %ld Pa\r\n"
-                       "Baslangic Sicakligi: %.2f C\r\n"
-                       "Kalibre Edilen Rampa Irtifasi: %.2f m\r\n"
-                       "================================================\r\n\n",
-           initialPressure, initialTemperature, groundAltitude);
-
-   HAL_UART_Transmit(&huart2, (uint8_t*)startupMsg, strlen(startupMsg), 100);
-   // ---------------------------------------------------------------
 
   /* USER CODE END 2 */
 
@@ -187,7 +146,10 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1) {
+	  while (1) {
+
+
+
 
     /* USER CODE END WHILE */
 
